@@ -2,6 +2,9 @@
 
 Teach a machine to read a **ghost font**.
 
+> **Full write-up with pictures:** [etairos.ai/ghost_read](https://etairos.ai/ghost_read/) covers
+> the whole investigation, what the machine sees, the dead ends, the math, and the decoded results.
+
 A ghost font (see [mixfont.com/ghost-font](https://www.mixfont.com/ghost-font)) hides text in
 **pixel motion**. Any single frame of the video is pure static. The time-average of all frames
 is also flat noise. The letters exist only in *coherent motion*: inside a glyph every pixel
