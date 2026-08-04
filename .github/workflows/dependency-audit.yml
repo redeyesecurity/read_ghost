@@ -1,0 +1,79 @@
+name: Dependency audit
+
+# Audits the dependencies this project would actually install.
+#
+# Added after the 2026-08-04 keyv/cacheable npm compromise. That campaign was
+# npm, but the mechanism is ecosystem-agnostic: a compromised maintainer account
+# publishes a version whose install step runs attacker code. On PyPI that step is
+# setup.py in an sdist. The malicious npm versions also carried valid sigstore
+# provenance, so signature checks passed them, which is why this looks at what
+# changed inside the artifact instead.
+#
+# This project depends on ranges and commits no lockfile, so a pull-request diff
+# cannot show a dependency change: the version is chosen at install time and no
+# file here changes when a new release lands. So the audit resolves first (pip
+# --dry-run, nothing is installed) and audits what a build would really pull
+# down, which is also why it runs on a schedule and not only on pull requests.
+#
+# Policy: block on CRITICAL, warn on HIGH.
+#   CRITICAL = an install-time execution hook the previous release did not have.
+#   HIGH     = new root executables, large or obfuscated new files, credential
+#              and IMDS strings. These fire on legitimate changes too, so they
+#              warn rather than block.
+#
+# Tool: https://github.com/redeyesecurity/upgrade-audit
+
+on:
+  pull_request:
+    paths:
+      - 'requirements*.txt'
+      - '**/requirements*.txt'
+      - 'poetry.lock'
+      - 'pyproject.toml'
+  schedule:
+    # A range picks up a new release with no commit here, so time is the trigger.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch the auditor
+        run: |
+          curl -sSfL -o upgrade-audit.py \
+            https://raw.githubusercontent.com/redeyesecurity/upgrade-audit/main/upgrade-audit.py
+
+      - name: Audit what would be installed
+        run: |
+          if [ -f requirements.txt ]; then TARGET=requirements.txt; else TARGET=.; fi
+          echo "Resolving $TARGET"
+
+          set +e
+          python3 upgrade-audit.py pypi --resolve "$TARGET" \
+            --cooldown 3 --fail-on CRITICAL 2>&1 | tee audit.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          # A resolution failure is a broken environment, not a security finding.
+          # Say so loudly and move on rather than failing every build in the repo.
+          if grep -q 'pip could not resolve' audit.txt; then
+            echo "::warning::Could not resolve dependencies, so nothing was audited."
+            exit 0
+          fi
+          if grep -q '\[HIGH\]' audit.txt; then
+            echo "::warning::Dependency audit raised HIGH findings. Review before merging."
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Dependency audit found a CRITICAL change (a new install-time hook). Blocking."
+            exit 1
+          fi
